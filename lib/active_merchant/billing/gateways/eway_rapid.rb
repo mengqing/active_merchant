@@ -49,8 +49,9 @@ module ActiveMerchant #:nodoc:
           # still need a placeholder url to pass to eWay, and that is what
           # example.com is used for here.
           r.process{setup_purchase(amount, options.merge(:redirect_url => "http://example.com/"))}
+          authorization = r.authorization
           r.process{run_purchase(r.authorization, payment_method, r.params["formactionurl"])}
-          r.process{status(r.authorization)}
+          r.process{status(authorization)}
         end
       end
 
