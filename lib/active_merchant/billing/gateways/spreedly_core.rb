@@ -93,7 +93,8 @@ module ActiveMerchant #:nodoc:
       # credit_card    - The CreditCard to store
       # options        - A standard ActiveMerchant options hash
       def store(credit_card, options={})
-        save_card(true, credit_card, options)
+        retain = (options.has_key?(:retain) ? options[:retain] : true)
+        save_card(retain, credit_card, options)
       end
 
       # Public: Redact the CreditCard in Spreedly. This wipes the sensitive
@@ -118,7 +119,7 @@ module ActiveMerchant #:nodoc:
 
       def purchase_with_token(money, payment_method_token, options)
         request = auth_purchase_request(money, payment_method_token, options)
-        commit("gateways/#{@options[:gateway_token]}/purchase.xml", request)
+        commit("gateways/#{options[:gateway_token] || @options[:gateway_token]}/purchase.xml", request)
       end
 
       def authorize_with_token(money, payment_method_token, options)
@@ -137,11 +138,13 @@ module ActiveMerchant #:nodoc:
       def add_invoice(doc, money, options)
         doc.amount amount(money)
         doc.currency_code(options[:currency] || currency(money) || default_currency)
+        doc.order_id(options[:order_id])
       end
 
       def add_credit_card(doc, credit_card, options)
         doc.credit_card do
           doc.number(credit_card.number)
+          doc.verification_value(credit_card.verification_value)
           doc.first_name(credit_card.first_name)
           doc.last_name(credit_card.last_name)
           doc.month(credit_card.month)
