@@ -4,8 +4,8 @@ module ActiveMerchant #:nodoc:
 
       # we recommend setting up merchant-specific endpoints.
       # https://docs.adyen.com/developers/api-manual#apiendpoints
-      self.test_url = 'https://pal-test.adyen.com/pal/servlet/Payment/v18'
-      self.live_url = 'https://pal-live.adyen.com/pal/servlet/Payment/v18'
+      self.test_url = 'https://pal-test.adyen.com/pal/servlet/Payment/'
+      self.live_url = 'https://pal-live.adyen.com/pal/servlet/Payment/'
 
       self.supported_countries = ['AT', 'AU', 'BE', 'BG', 'BR', 'CH', 'CY', 'CZ', 'DE', 'DK', 'EE', 'ES', 'FI', 'FR', 'GB', 'GI', 'GR', 'HK', 'HU', 'IE', 'IS', 'IT', 'LI', 'LT', 'LU', 'LV', 'MC', 'MT', 'MX', 'NL', 'NO', 'PL', 'PT', 'RO', 'SE', 'SG', 'SK', 'SI', 'US']
       self.default_currency = 'USD'
@@ -15,6 +15,8 @@ module ActiveMerchant #:nodoc:
 
       self.homepage_url = 'https://www.adyen.com/'
       self.display_name = 'Adyen'
+
+      API_VERSION = 'v40'
 
       STANDARD_ERROR_CODE_MAPPING = {
         '101' => STANDARD_ERROR_CODE[:incorrect_number],
@@ -80,6 +82,7 @@ module ActiveMerchant #:nodoc:
         post = init_post(options)
         add_invoice_for_modification(post, money, options)
         add_reference(post, authorization, options)
+        add_extra_data(post, nil, options)
         commit('adjustAuthorisation', post, options)
       end
 
@@ -137,10 +140,14 @@ module ActiveMerchant #:nodoc:
         '16' => 'N',  # Postal code doesn't match, address unknown
         '17' => 'U',  # Postal code doesn't match, address not checked
         '18' => 'I',  # Neither postal code nor address were checked
+        '19' => 'L',  # Name and postal code matches.
         '20' => 'V',  # Name, address and postal code matches.
+        '21' => 'O',  # Name and address matches.
+        '22' => 'K',  # Name matches.
         '23' => 'F',  # Postal code matches, name doesn't match.
         '24' => 'H',  # Both postal code and address matches, name doesn't match.
-        '25' => 'T'  # Address matches, name doesn't match.
+        '25' => 'T',  # Address matches, name doesn't match.
+        '26' => 'N'   # Neither postal code, address nor name matches.
       }
 
       CVC_MAPPING = {
@@ -174,6 +181,11 @@ module ActiveMerchant #:nodoc:
         post[:additionalData][:overwriteBrand] = normalize(options[:overwrite_brand]) if options[:overwrite_brand]
         post[:additionalData][:customRoutingFlag] = options[:custom_routing_flag] if options[:custom_routing_flag]
         post[:additionalData]['paymentdatasource.type'] = NETWORK_TOKENIZATION_CARD_SOURCE[payment.source.to_s] if payment.is_a?(NetworkTokenizationCreditCard)
+        post[:additionalData][:authorisationType] = options[:authorisation_type] if options[:authorisation_type]
+        post[:additionalData][:adjustAuthorisationData] = options[:adjust_authorisation_data] if options[:adjust_authorisation_data]
+        post[:additionalData][:industryUsage] = options[:industry_usage] if options[:industry_usage]
+        post[:additionalData][:updateShopperStatement] = options[:update_shopper_statement] if options[:update_shopper_statement]
+        post[:additionalData][:RequestedTestAcquirerResponseCode] = options[:requested_test_acquirer_response_code] if options[:requested_test_acquirer_response_code] && test?
         post[:deviceFingerprint] = options[:device_fingerprint] if options[:device_fingerprint]
         add_risk_data(post, options)
       end
@@ -214,13 +226,13 @@ module ActiveMerchant #:nodoc:
       def add_address(post, options)
         return unless post[:card]&.kind_of?(Hash)
         if (address = options[:billing_address] || options[:address]) && address[:country]
-          post[:card][:billingAddress] = {}
-          post[:card][:billingAddress][:street] = address[:address1] || 'N/A'
-          post[:card][:billingAddress][:houseNumberOrName] = address[:address2] || 'N/A'
-          post[:card][:billingAddress][:postalCode] = address[:zip] if address[:zip]
-          post[:card][:billingAddress][:city] = address[:city] || 'N/A'
-          post[:card][:billingAddress][:stateOrProvince] = address[:state] || 'N/A'
-          post[:card][:billingAddress][:country] = address[:country] if address[:country]
+          post[:billingAddress] = {}
+          post[:billingAddress][:street] = address[:address1] || 'N/A'
+          post[:billingAddress][:houseNumberOrName] = address[:address2] || 'N/A'
+          post[:billingAddress][:postalCode] = address[:zip] if address[:zip]
+          post[:billingAddress][:city] = address[:city] || 'N/A'
+          post[:billingAddress][:stateOrProvince] = address[:state] || 'N/A'
+          post[:billingAddress][:country] = address[:country] if address[:country]
         end
       end
 
@@ -308,9 +320,31 @@ module ActiveMerchant #:nodoc:
       end
 
       def add_3ds(post, options)
-        return unless options[:execute_threed] || options[:threed_dynamic]
-        post[:browserInfo] = { userAgent: options[:user_agent], acceptHeader: options[:accept_header] }
-        post[:additionalData] = { executeThreeD: 'true' } if options[:execute_threed]
+        if three_ds_2_options = options[:three_ds_2]
+          if browser_info = three_ds_2_options[:browser_info]
+            post[:browserInfo] = {
+              acceptHeader: browser_info[:accept_header],
+              colorDepth: browser_info[:depth],
+              javaEnabled: browser_info[:java],
+              language: browser_info[:language],
+              screenHeight: browser_info[:height],
+              screenWidth: browser_info[:width],
+              timeZoneOffset: browser_info[:timezone],
+              userAgent: browser_info[:user_agent]
+            }
+
+            if device_channel = three_ds_2_options[:channel]
+              post[:threeDS2RequestData] = {
+                deviceChannel: device_channel,
+                notificationURL: three_ds_2_options[:notification_url] || 'https://example.com/notification'
+              }
+            end
+          end
+        else
+          return unless options[:execute_threed] || options[:threed_dynamic]
+          post[:browserInfo] = { userAgent: options[:user_agent], acceptHeader: options[:accept_header] }
+          post[:additionalData] = { executeThreeD: 'true' } if options[:execute_threed]
+        end
       end
 
       def parse(body)
@@ -349,11 +383,11 @@ module ActiveMerchant #:nodoc:
 
       def url
         if test?
-          test_url
+          "#{test_url}#{API_VERSION}"
         elsif @options[:subdomain]
-          "https://#{@options[:subdomain]}-pal-live.adyenpayments.com/pal/servlet/Payment/v18"
+          "https://#{@options[:subdomain]}-pal-live.adyenpayments.com/pal/servlet/Payment/#{API_VERSION}"
         else
-          live_url
+          "#{live_url}#{API_VERSION}"
         end
       end
 
@@ -374,8 +408,10 @@ module ActiveMerchant #:nodoc:
         case action.to_s
         when 'authorise', 'authorise3d'
           ['Authorised', 'Received', 'RedirectShopper'].include?(response['resultCode'])
-        when 'capture', 'refund', 'cancel', 'adjustAuthorisation'
+        when 'capture', 'refund', 'cancel'
           response['response'] == "[#{action}-received]"
+        when 'adjustAuthorisation'
+          response['response'] == 'Authorised' || response['response'] == '[adjustAuthorisation-received]'
         else
           false
         end
